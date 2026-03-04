@@ -10,29 +10,23 @@ from dataclasses import dataclass
 import pyautogui
 import pygetwindow as gw
 from PIL import Image
-import numpy as np
 
-# 尝试导入OCR库
-try:
-    from paddleocr import PaddleOCR
-    PADDLE_AVAILABLE = True
-except ImportError:
-    PADDLE_AVAILABLE = False
-    print("[警告] PaddleOCR未安装，使用备选方案")
-    print("安装: pip install paddleocr paddlepaddle")
+# 导入统一的OCR引擎
+from ocr_engine import OCREngine, PADDLE_AVAILABLE, TESSERACT_AVAILABLE
 
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
+# OCR引擎可用性提示
+if not PADDLE_AVAILABLE and not TESSERACT_AVAILABLE:
+    print("[警告] 没有可用的OCR引擎")
+    print("请运行: python install_ocr.py")
+else:
+    print(f"[OCR] Paddle: {'✅' if PADDLE_AVAILABLE else '❌'}, Tesseract: {'✅' if TESSERACT_AVAILABLE else '❌'}")
 
 
 @dataclass
 class Message:
     """消息对象"""
     contact: str
-    sender: str  # "me" 或 对方名称
+    sender: str
     content: str
     timestamp: datetime
     message_type: str = "text"
@@ -41,46 +35,22 @@ class Message:
 class MessageListener:
     """消息监听器"""
     
-    def __init__(self, db=None, ocr_engine: str = "paddle"):
+    def __init__(self, db=None, ocr_engine: str = "auto"):
         self.db = db
         self.running = False
         self.listener_thread: Optional[threading.Thread] = None
         self.callbacks: List[Callable] = []
-        self.last_check_time = {}
-        self.check_interval = 3  # 检查间隔（秒）
-        self.last_messages_hash = {}  # 最后消息哈希
+        self.check_interval = 3
+        self.last_messages_hash = {}
         
         # 初始化OCR
-        self.ocr = self._init_ocr(ocr_engine)
+        self.ocr = OCREngine(ocr_engine)
         
-        # 当前监控的联系人
+        # 监控的联系人
         self.monitored_contacts: set = set()
-        
-        # 初始化OCR
-        self.ocr = self._init_ocr(ocr_engine)
-        
-        # 当前监控的联系人
-        self.monitored_contacts: set = set()
-    
-    def _init_ocr(self, engine: str):
-        """初始化OCR引擎"""
-        if engine == "paddle" and PADDLE_AVAILABLE:
-            print("[OCR] 使用PaddleOCR")
-            return PaddleOCR(
-                use_angle_cls=True,
-                lang='ch',
-                show_log=False,
-                use_gpu=False
-            )
-        elif TESSERACT_AVAILABLE:
-            print("[OCR] 使用Tesseract")
-            return "tesseract"
-        else:
-            print("[警告] 无OCR引擎，监听功能受限")
-            return None
     
     def _get_chat_window(self):
-        """获取当前聊天窗口"""
+        """获取聊天窗口"""
         try:
             windows = gw.getWindowsWithTitle("Dragon")
             for win in windows:
@@ -89,7 +59,6 @@ class MessageListener:
         except:
             pass
         
-        # 回退到主窗口
         try:
             wins = gw.getWindowsWithTitle("微信")
             for w in wins:
@@ -103,8 +72,6 @@ class MessageListener:
     def _capture_message_area(self, window) -> Optional[Image.Image]:
         """截图消息区域"""
         try:
-            # 计算消息区域（窗口右侧的聊天区域）
-            # 微信聊天区域大约在窗口右侧50%-95%，顶部15%-85%
             left = window.left + int(window.width * 0.25)
             top = window.top + int(window.height * 0.12)
             width = int(window.width * 0.7)
@@ -117,71 +84,11 @@ class MessageListener:
             print(f"[截图错误] {e}")
             return None
     
-    def _extract_text_paddle(self, image: Image.Image) -> List[Dict]:
-        """使用PaddleOCR提取文字"""
-        try:
-            # 转换为numpy数组
-            img_array = np.array(image)
-            
-            # OCR识别
-            result = self.ocr.ocr(img_array, cls=True)
-            
-            messages = []
-            if result and result[0]:
-                for line in result[0]:
-                    if line:
-                        bbox = line[0]  # 边界框
-                        text = line[1][0]  # 文字内容
-                        confidence = line[1][1]  # 置信度
-                        
-                        if confidence > 0.75 and text.strip():
-                            # 根据x坐标判断左右（发送/接收）
-                            # bbox: [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
-                            center_x = (bbox[0][0] + bbox[2][0]) / 2
-                            img_width = image.width
-                            
-                            sender = "other" if center_x < img_width * 0.5 else "me"
-                            
-                            messages.append({
-                                'text': text,
-                                'sender': sender,
-                                'confidence': confidence,
-                                'position': center_x
-                            })
-            
-            return messages
-            
-        except Exception as e:
-            print(f"[OCR错误] {e}")
-            return []
-    
-    def _extract_text_tesseract(self, image: Image.Image) -> List[Dict]:
-        """使用Tesseract提取文字（备选）"""
-        try:
-            text = pytesseract.image_to_string(image, lang='chi_sim+eng')
-            lines = [line.strip() for line in text.split('\n') if line.strip()]
-            
-            messages = []
-            for line in lines:
-                # Tesseract无法区分发送者，默认标记为other
-                messages.append({
-                    'text': line,
-                    'sender': 'unknown',
-                    'confidence': 0.5
-                })
-            
-            return messages
-            
-        except Exception as e:
-            print(f"[OCR错误] {e}")
-            return []
-    
     def _get_current_contact(self) -> Optional[str]:
-        """获取当前聊天对象名称"""
+        """获取当前联系人"""
         try:
             window = self._get_chat_window()
             if window and "Dragon" in window.title:
-                # Dragon窗口标题通常是 "xxx - Dragon"
                 return window.title.replace(" - Dragon", "").strip()
         except:
             pass
@@ -206,13 +113,19 @@ class MessageListener:
         if not screenshot:
             return []
         
+        # 保存临时文件进行OCR
+        temp_path = "_temp_ocr.png"
+        screenshot.save(temp_path)
+        
         # OCR识别
-        if self.ocr == "tesseract":
-            raw_messages = self._extract_text_tesseract(screenshot)
-        elif self.ocr:
-            raw_messages = self._extract_text_paddle(screenshot)
-        else:
-            return []
+        raw_messages = self.ocr.recognize(temp_path)
+        
+        # 清理临时文件
+        try:
+            import os
+            os.remove(temp_path)
+        except:
+            pass
         
         # 处理识别结果
         new_messages = []
@@ -221,47 +134,56 @@ class MessageListener:
             if not content or len(content) < 2:
                 continue
             
-            # 判断发送者
-            if msg['sender'] == 'me':
-                sender = 'me'
-            elif msg['sender'] == 'other':
-                sender = contact
+            # 根据x坐标判断发送者
+            if 'position' in msg:
+                center_x = msg['position'][0] if isinstance(msg['position'], tuple) else msg['position']
+                # 如果x坐标在图片左半边，是对方消息；右半边是自己消息
+                img_width = screenshot.width
+                sender = "other" if center_x < img_width * 0.5 else "me"
             else:
-                sender = 'unknown'
+                sender = "unknown"
             
-            # 保存到数据库（会自动去重）
-            saved = self.db.save_message(
-                contact=contact,
-                sender=sender,
-                content=content,
-                msg_type='text'
-            )
+            # 转换sender
+            if sender == "other":
+                sender_name = contact
+            elif sender == "me":
+                sender_name = "me"
+            else:
+                sender_name = "unknown"
             
-            if saved:
-                message = Message(
+            # 保存到数据库
+            if self.db:
+                saved = self.db.save_message(
                     contact=contact,
-                    sender=sender,
+                    sender=sender_name,
                     content=content,
-                    timestamp=datetime.now()
+                    msg_type='text'
                 )
-                new_messages.append(message)
                 
-                # 触发回调
-                for callback in self.callbacks:
-                    try:
-                        callback(message)
-                    except Exception as e:
-                        print(f"[回调错误] {e}")
+                if saved:
+                    message = Message(
+                        contact=contact,
+                        sender=sender_name,
+                        content=content,
+                        timestamp=datetime.now()
+                    )
+                    new_messages.append(message)
+                    
+                    # 触发回调
+                    for callback in self.callbacks:
+                        try:
+                            callback(message)
+                        except Exception as e:
+                            print(f"[回调错误] {e}")
         
         return new_messages
     
     @property
     def is_listening(self) -> bool:
-        """是否正在监听"""
         return self.running
     
     def start_listening(self, contacts=None, interval: float = 3.0, on_message=None):
-        """开始监听（兼容server.py接口）"""
+        """开始监听"""
         if self.running:
             print("[监听] 已经在运行中")
             return
@@ -272,15 +194,10 @@ class MessageListener:
         if contacts:
             self.monitored_contacts = set(contacts)
         
-        # 添加消息回调
         if on_message:
             self.add_callback(on_message)
         
         print(f"[监听] 启动，间隔{interval}秒")
-        if self.monitored_contacts:
-            print(f"[监听] 监控联系人: {self.monitored_contacts}")
-        else:
-            print("[监听] 监控所有联系人")
         
         def listen_loop():
             while self.running:
@@ -300,53 +217,24 @@ class MessageListener:
         self.listener_thread.start()
     
     def stop_listening(self):
-        """停止监听（兼容server.py接口）"""
-        self.running = False
-        if self.listener_thread:
-            self.listener_thread.join(timeout=5)
-        print("[监听] 已停止")
-    
-    def start(self, interval: float = 3.0, contacts: List[str] = None):
-        """开始监听（旧接口）"""
-        self.start_listening(contacts=contacts, interval=interval)
-    
-    def stop(self):
-        """停止监听（旧接口）"""
-        self.stop_listening()
-            print(f"[监听] 监控联系人: {self.monitored_contacts}")
-        else:
-            print("[监听] 监控所有联系人")
-        
-        def listen_loop():
-            while self.running:
-                try:
-                    new_msgs = self.check_new_messages()
-                    if new_msgs:
-                        for msg in new_msgs:
-                            print(f"[新消息] {msg.contact} - {msg.sender}: {msg.content[:50]}")
-                    
-                    time.sleep(interval)
-                    
-                except Exception as e:
-                    print(f"[监听错误] {e}")
-                    time.sleep(interval)
-        
-        self.listener_thread = threading.Thread(target=listen_loop, daemon=True)
-        self.listener_thread.start()
-    
-    def stop(self):
         """停止监听"""
         self.running = False
         if self.listener_thread:
             self.listener_thread.join(timeout=5)
         print("[监听] 已停止")
     
+    def start(self, interval: float = 3.0, contacts: List[str] = None):
+        """旧接口"""
+        self.start_listening(contacts=contacts, interval=interval)
+    
+    def stop(self):
+        """旧接口"""
+        self.stop_listening()
+    
     def add_callback(self, callback: Callable[[Message], None]):
-        """添加新消息回调"""
         self.callbacks.append(callback)
     
     def remove_callback(self, callback: Callable[[Message], None]):
-        """移除回调"""
         if callback in self.callbacks:
             self.callbacks.remove(callback)
 
@@ -358,9 +246,8 @@ if __name__ == "__main__":
     db = ChatDatabase("test_listener.db")
     listener = MessageListener(db)
     
-    # 添加回调
     def on_new_message(msg: Message):
-        print(f"\n[回调] 收到消息: {msg.contact} - {msg.content}")
+        print(f"\n[回调] {msg.contact}: {msg.content}")
     
     listener.add_callback(on_new_message)
     
