@@ -361,12 +361,12 @@ def get_wechat_status():
 
 # 导入数据库和监听模块
 from database import get_database
-from message_listener import MessageListener
+from message_listener import WeChatMessageListener  # 使用新的监听器
 from auto_reply import AutoReplyEngine, PRESET_RULES
 
 # 全局实例
 db = get_database()
-listener = MessageListener(db)
+listener = WeChatMessageListener(db)  # 使用新的监听器类
 auto_reply = AutoReplyEngine(db)
 
 TOOLS = [
