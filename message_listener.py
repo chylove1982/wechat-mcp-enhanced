@@ -82,17 +82,58 @@ class WeChatMessageListener:
         return None
     
     def get_current_contact(self) -> Optional[str]:
-        """获取当前聊天对象"""
+        """获取当前聊天对象 - 改进版"""
         try:
             window = self.get_wechat_window()
-            if window:
-                # Dragon窗口标题格式: "联系人名称 - Dragon"
-                if " - Dragon" in window.title:
-                    return window.title.replace(" - Dragon", "").strip()
-                # 或者是直接显示联系人名
-                return window.title.strip()
-        except:
-            pass
+            if not window:
+                return None
+            
+            title = window.title.strip()
+            
+            # 方法1: Dragon窗口标题格式: "联系人名称 - Dragon"
+            if " - Dragon" in title:
+                contact = title.replace(" - Dragon", "").strip()
+                if contact and contact != "微信":
+                    return contact
+            
+            # 方法2: 尝试截图识别顶部标题栏
+            try:
+                # 截图窗口顶部区域（标题栏）
+                title_height = 40
+                screenshot = pyautogui.screenshot(region=(
+                    window.left + 100,  # 跳过左侧头像区域
+                    window.top + 10,
+                    min(300, window.width - 200),  # 标题区域宽度
+                    title_height
+                ))
+                
+                # 临时保存并OCR识别
+                temp_path = "_temp_title.png"
+                screenshot.save(temp_path)
+                results = self.ocr.recognize(temp_path)
+                
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                # 取第一个识别结果作为联系人名称
+                if results:
+                    contact = results[0].get('text', '').strip()
+                    # 过滤掉常见UI文字
+                    if contact and contact not in ['微信', '返回', '搜索', '']:
+                        return contact
+                        
+            except Exception as e:
+                print(f"[识别标题错误] {e}")
+            
+            # 方法3: 如果标题不是"微信"，直接返回标题
+            if title and title != "微信":
+                return title
+                
+        except Exception as e:
+            print(f"[获取联系人错误] {e}")
+            
         return None
     
     def capture_chat_area(self, window) -> Optional[Image.Image]:
@@ -316,6 +357,12 @@ class WeChatMessageListener:
                     if new_msgs:
                         for msg in new_msgs:
                             print(f"[新消息] {msg.contact} - {msg.sender}: {msg.content[:50]}")
+                            # 调用回调函数
+                            for callback in self.callbacks:
+                                try:
+                                    callback(msg)
+                                except Exception as e:
+                                    print(f"[回调错误] {e}")
                     
                     time.sleep(interval)
                     

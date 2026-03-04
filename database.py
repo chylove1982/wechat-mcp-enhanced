@@ -36,17 +36,21 @@ class ChatDatabase:
                 )
             ''')
             
-            # 联系人表
+            # 联系人表 - 增强版
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS contacts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE NOT NULL,
-                    nickname TEXT,
-                    remark TEXT,
+                    display_name TEXT NOT NULL,      -- 显示名称（从窗口标题获取）
+                    wechat_id TEXT,                   -- 微信ID（如果有）
+                    remark_name TEXT,                 -- 备注名
+                    nickname TEXT,                    -- 昵称
+                    contact_type TEXT DEFAULT 'individual',  -- individual/group/official
+                    avatar_path TEXT,                 -- 头像路径（可选）
                     last_message_time DATETIME,
                     unread_count INTEGER DEFAULT 0,
                     auto_reply_enabled BOOLEAN DEFAULT 0,
-                    auto_reply_rules TEXT
+                    auto_reply_rules TEXT,
+                    extra_data TEXT                   -- 额外JSON数据
                 )
             ''')
             
@@ -198,7 +202,44 @@ class ChatDatabase:
             
             conn.commit()
     
-    def get_auto_reply_rules(self, contact: str) -> Optional[Dict]:
+    def save_contact(self, display_name: str, wechat_id: str = None, 
+                     contact_type: str = 'individual', extra_data: dict = None):
+        """保存或更新联系人信息"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            extra_json = json.dumps(extra_data) if extra_data else None
+            
+            cursor.execute('''
+                INSERT INTO contacts 
+                (display_name, wechat_id, contact_type, extra_data, last_message_time)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(display_name) DO UPDATE SET
+                last_message_time = excluded.last_message_time,
+                wechat_id = COALESCE(excluded.wechat_id, wechat_id),
+                extra_data = COALESCE(excluded.extra_data, extra_data)
+            ''', (display_name, wechat_id, contact_type, extra_json, 
+                 datetime.now().isoformat()))
+            
+            conn.commit()
+    
+    def get_contact_info(self, display_name: str) -> Optional[Dict]:
+        """获取联系人详细信息"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM contacts WHERE display_name = ?
+            ''', (display_name,))
+            
+            row = cursor.fetchone()
+            if row:
+                info = dict(row)
+                if info.get('extra_data'):
+                    info['extra_data'] = json.loads(info['extra_data'])
+                return info
+            return None
         """获取自动回复规则"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
