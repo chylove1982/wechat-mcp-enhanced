@@ -595,14 +595,14 @@ async def handle_tool(name, arguments):
             if listener.is_listening:
                 return {"content": [{"type": "text", "text": "[警告] 已经在监听中"}]}
             
-            def on_message(contact, msg, msg_id):
-                safe_print(f"[监听] 新消息 [{contact}]: {msg.text[:50]}...")
+            def on_message(msg):
+                safe_print(f"[监听] 新消息 [{msg.contact}]: {msg.content[:50]}...")
                 # 检查自动回复
-                reply = auto_reply.handle_incoming_message(contact, msg.text)
+                reply = auto_reply.handle_incoming_message(msg.contact, msg.sender, msg.content)
                 if reply:
                     safe_print(f"[自动回复] {reply}")
                     # 发送自动回复
-                    send_message_to_contact(contact, reply)
+                    send_message_to_contact(msg.contact, reply)
             
             listener.start_listening(
                 contacts=contacts if contacts else None,
