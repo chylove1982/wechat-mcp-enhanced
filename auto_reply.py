@@ -118,7 +118,12 @@ class AutoReplyEngine:
         rules = self.db.get_auto_reply_rules(contact)
         if rules:
             rules['enabled'] = True
-            self.db.set_auto_reply(contact, True, rules.get('rules', []))
+            self.db.set_auto_reply(
+                contact=contact, 
+                enabled=True, 
+                rules=rules.get('rules', []),
+                mode=rules.get('mode', 'keyword')
+            )
             print(f"[启用] {contact} 自动回复已开启")
     
     def disable_auto_reply(self, contact: str):
@@ -126,8 +131,31 @@ class AutoReplyEngine:
         rules = self.db.get_auto_reply_rules(contact)
         if rules:
             rules['enabled'] = False
-            self.db.set_auto_reply(contact, False, rules.get('rules', []))
+            self.db.set_auto_reply(
+                contact=contact, 
+                enabled=False, 
+                rules=rules.get('rules', []),
+                mode=rules.get('mode', 'keyword')
+            )
             print(f"[禁用] {contact} 自动回复已关闭")
+    
+    def set_auto_reply(self, contact: str, enabled: bool, mode: str = 'keyword', rules: List[Dict] = None):
+        """设置自动回复（兼容server.py接口）"""
+        if rules is None:
+            rules = []
+        self.set_rules(contact, rules, mode)
+        if not enabled:
+            self.disable_auto_reply(contact)
+    
+    def test_reply(self, contact: str, message: str) -> Dict:
+        """测试自动回复（兼容server.py接口）"""
+        reply = self.get_reply(contact, message)
+        return {
+            "contact": contact,
+            "test_message": message,
+            "would_reply": reply is not None,
+            "reply_content": reply if reply else "无匹配规则"
+        }
 
 
 # 预设规则模板
@@ -145,6 +173,9 @@ REPLY_TEMPLATES = {
         {"keyword": "*", "response": "【自动回复】非工作时间，如有急事请电话联系。", "priority": 0}
     ]
 }
+
+# 别名，兼容server.py导入
+PRESET_RULES = REPLY_TEMPLATES
 
 
 def get_template(name: str) -> List[Dict]:

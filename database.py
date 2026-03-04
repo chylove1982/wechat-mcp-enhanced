@@ -176,10 +176,17 @@ class ChatDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
     
-    def set_auto_reply(self, contact: str, enabled: bool, rules: List[Dict]):
+    def set_auto_reply(self, contact: str, enabled: bool, rules: List[Dict], mode: str = 'keyword'):
         """设置自动回复规则"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            
+            # 将mode存储在规则中
+            rules_data = {
+                'rules': rules,
+                'mode': mode,
+                'enabled': enabled
+            }
             
             cursor.execute('''
                 INSERT INTO contacts (name, auto_reply_enabled, auto_reply_rules)
@@ -187,7 +194,7 @@ class ChatDatabase:
                 ON CONFLICT(name) DO UPDATE SET
                 auto_reply_enabled = excluded.auto_reply_enabled,
                 auto_reply_rules = excluded.auto_reply_rules
-            ''', (contact, enabled, json.dumps(rules)))
+            ''', (contact, enabled, json.dumps(rules_data)))
             
             conn.commit()
     
@@ -195,18 +202,35 @@ class ChatDatabase:
         """获取自动回复规则"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             cursor.execute('''
-                SELECT auto_reply_enabled, auto_reply_rules 
+                SELECT auto_reply_enabled, auto_reply_rules
                 FROM contacts WHERE name = ?
             ''', (contact,))
-            
+
             row = cursor.fetchone()
-            if row and row[0]:
-                return {
-                    'enabled': row[0],
-                    'rules': json.loads(row[1]) if row[1] else []
-                }
+            if row:
+                try:
+                    rules_data = json.loads(row[1]) if row[1] else {}
+                    # 兼容旧格式（纯列表）和新格式（字典）
+                    if isinstance(rules_data, list):
+                        return {
+                            'enabled': row[0],
+                            'rules': rules_data,
+                            'mode': 'keyword'
+                        }
+                    else:
+                        return {
+                            'enabled': rules_data.get('enabled', row[0]),
+                            'rules': rules_data.get('rules', []),
+                            'mode': rules_data.get('mode', 'keyword')
+                        }
+                except:
+                    return {
+                        'enabled': row[0],
+                        'rules': [],
+                        'mode': 'keyword'
+                    }
             return None
     
     def get_recent_context(self, contact: str, limit: int = 10) -> List[Tuple[str, str]]:
@@ -239,6 +263,27 @@ class ChatDatabase:
             
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
+    
+    def get_statistics(self) -> Dict:
+        """获取聊天统计信息"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            stats = {}
+            
+            # 总消息数
+            cursor.execute('SELECT COUNT(*) FROM chat_messages')
+            stats['total_messages'] = cursor.fetchone()[0]
+            
+            # 总联系人数
+            cursor.execute('SELECT COUNT(*) FROM contacts')
+            stats['total_contacts'] = cursor.fetchone()[0]
+            
+            # 未读消息数
+            cursor.execute('SELECT COUNT(*) FROM chat_messages WHERE is_read = 0')
+            stats['unread_messages'] = cursor.fetchone()[0]
+            
+            return stats
 
 
 # 测试代码
@@ -260,3 +305,10 @@ if __name__ == "__main__":
     contacts = db.get_contacts()
     for c in contacts:
         print(f"{c['name']}: 未读{c['unread_count']}条")
+
+
+def get_database(db_path: str = "chat_history.db") -> ChatDatabase:
+    """获取数据库实例（单例模式）"""
+    if not hasattr(get_database, '_instance'):
+        get_database._instance = ChatDatabase(db_path)
+    return get_database._instance

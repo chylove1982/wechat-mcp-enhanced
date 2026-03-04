@@ -41,12 +41,20 @@ class Message:
 class MessageListener:
     """消息监听器"""
     
-    def __init__(self, db, ocr_engine: str = "paddle"):
+    def __init__(self, db=None, ocr_engine: str = "paddle"):
         self.db = db
         self.running = False
         self.listener_thread: Optional[threading.Thread] = None
         self.callbacks: List[Callable] = []
         self.last_check_time = {}
+        self.check_interval = 3  # 检查间隔（秒）
+        self.last_messages_hash = {}  # 最后消息哈希
+        
+        # 初始化OCR
+        self.ocr = self._init_ocr(ocr_engine)
+        
+        # 当前监控的联系人
+        self.monitored_contacts: set = set()
         
         # 初始化OCR
         self.ocr = self._init_ocr(ocr_engine)
@@ -247,18 +255,64 @@ class MessageListener:
         
         return new_messages
     
-    def start(self, interval: float = 3.0, contacts: List[str] = None):
-        """开始监听"""
+    @property
+    def is_listening(self) -> bool:
+        """是否正在监听"""
+        return self.running
+    
+    def start_listening(self, contacts=None, interval: float = 3.0, on_message=None):
+        """开始监听（兼容server.py接口）"""
         if self.running:
             print("[监听] 已经在运行中")
             return
         
         self.running = True
+        self.check_interval = interval
+        
         if contacts:
             self.monitored_contacts = set(contacts)
         
+        # 添加消息回调
+        if on_message:
+            self.add_callback(on_message)
+        
         print(f"[监听] 启动，间隔{interval}秒")
         if self.monitored_contacts:
+            print(f"[监听] 监控联系人: {self.monitored_contacts}")
+        else:
+            print("[监听] 监控所有联系人")
+        
+        def listen_loop():
+            while self.running:
+                try:
+                    new_msgs = self.check_new_messages()
+                    if new_msgs:
+                        for msg in new_msgs:
+                            print(f"[新消息] {msg.contact} - {msg.sender}: {msg.content[:50]}")
+                    
+                    time.sleep(interval)
+                    
+                except Exception as e:
+                    print(f"[监听错误] {e}")
+                    time.sleep(interval)
+        
+        self.listener_thread = threading.Thread(target=listen_loop, daemon=True)
+        self.listener_thread.start()
+    
+    def stop_listening(self):
+        """停止监听（兼容server.py接口）"""
+        self.running = False
+        if self.listener_thread:
+            self.listener_thread.join(timeout=5)
+        print("[监听] 已停止")
+    
+    def start(self, interval: float = 3.0, contacts: List[str] = None):
+        """开始监听（旧接口）"""
+        self.start_listening(contacts=contacts, interval=interval)
+    
+    def stop(self):
+        """停止监听（旧接口）"""
+        self.stop_listening()
             print(f"[监听] 监控联系人: {self.monitored_contacts}")
         else:
             print("[监听] 监控所有联系人")
